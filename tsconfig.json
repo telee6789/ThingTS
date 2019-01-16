@@ -1,0 +1,12 @@
+{
+    "compilerOptions": {
+        "target": "es5",
+        "module": "es2015",
+        "declaration": true,
+        "sourceMap": true,
+        "outDir": "./build",
+        "lib": ["dom", "es2015", "es2016", "es2017"]
+    },
+    "include": ["./src"],
+    "exclude": ["./node_modules"]
+}
