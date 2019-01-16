@@ -4,13 +4,13 @@ import { App } from '../core-object/App';
 import { CameraView } from './CameraView';
 import { Camera } from 'three';
 import * as TWEEN from '@tweenjs/tween.js';
-import { OrbitControls } from '../three/OrbitControls';
+import { OrbitControls } from 'three';
 
 /*
  * @Author: kekeqy
  * @Date: 2018-12-10 13:34:25
  * @LastEditors: kekeqy
- * @LastEditTime: 2019-01-10 14:03:28
+ * @LastEditTime: 2019-01-16 15:11:27
  * @Description: 摄像机类，就是 app.camera 对象
  */
 export class CameraController {

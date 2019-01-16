@@ -3,7 +3,7 @@ import { LerpType } from '../other/LerpType';
 import { App } from '../core-object/App';
 import { CameraView } from './CameraView';
 import { Camera } from 'three';
-import { OrbitControls } from '../three/OrbitControls';
+import { OrbitControls } from 'three';
 export declare class CameraController {
     private _flyGroup;
     readonly app: App;

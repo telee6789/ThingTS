@@ -7,7 +7,7 @@ import { Utils } from '../util/Utils';
  * @Author: kekeqy
  * @Date: 2018-12-18 17:41:12
  * @LastEditors: kekeqy
- * @LastEditTime: 2019-01-16 14:09:47
+ * @LastEditTime: 2019-01-16 15:10:36
  * @Description: 复合相机
  */
 export class CombinedCamera extends Camera {
@@ -107,8 +107,8 @@ export class CombinedCamera extends Camera {
         }
     }
     public setLens(focalLength: number, filmGauge: number = 35): number {
-        var vExtentSlope = 0.5 * filmGauge / (focalLength * Math.max(this.cameraP.aspect, 1));
-        var fov = THREE.Math.RAD2DEG * 2 * Math.atan(vExtentSlope);
+        let vExtentSlope: number = 0.5 * filmGauge / (focalLength * Math.max(this.cameraP.aspect, 1));
+        let fov: number = THREE.Math.RAD2DEG * 2 * Math.atan(vExtentSlope);
         this.setFov(fov);
         return fov;
     }

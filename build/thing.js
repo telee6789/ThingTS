@@ -51080,6 +51080,1057 @@ THREE.GLTFLoader = ( function () {
 
 } )();
 /**
+ * @author qiao / https://github.com/qiao
+ * @author mrdoob / http://mrdoob.com
+ * @author alteredq / http://alteredqualia.com/
+ * @author WestLangley / http://github.com/WestLangley
+ * @author erich666 / http://erichaines.com
+ */
+
+// This set of controls performs orbiting, dollying (zooming), and panning.
+// Unlike TrackballControls, it maintains the "up" direction object.up (+Y by default).
+//
+//    Orbit - left mouse / touch: one-finger move
+//    Zoom - middle mouse, or mousewheel / touch: two-finger spread or squish
+//    Pan - right mouse, or left mouse + ctrl/meta/shiftKey, or arrow keys / touch: two-finger move
+
+THREE.OrbitControls = function ( object, domElement ) {
+
+	this.object = object;
+
+	this.domElement = ( domElement !== undefined ) ? domElement : document;
+
+	// Set to false to disable this control
+	this.enabled = true;
+
+	// "target" sets the location of focus, where the object orbits around
+	this.target = new THREE.Vector3();
+
+	// How far you can dolly in and out ( PerspectiveCamera only )
+	this.minDistance = 0;
+	this.maxDistance = Infinity;
+
+	// How far you can zoom in and out ( OrthographicCamera only )
+	this.minZoom = 0;
+	this.maxZoom = Infinity;
+
+	// How far you can orbit vertically, upper and lower limits.
+	// Range is 0 to Math.PI radians.
+	this.minPolarAngle = 0; // radians
+	this.maxPolarAngle = Math.PI; // radians
+
+	// How far you can orbit horizontally, upper and lower limits.
+	// If set, must be a sub-interval of the interval [ - Math.PI, Math.PI ].
+	this.minAzimuthAngle = - Infinity; // radians
+	this.maxAzimuthAngle = Infinity; // radians
+
+	// Set to true to enable damping (inertia)
+	// If damping is enabled, you must call controls.update() in your animation loop
+	this.enableDamping = false;
+	this.dampingFactor = 0.25;
+
+	// This option actually enables dollying in and out; left as "zoom" for backwards compatibility.
+	// Set to false to disable zooming
+	this.enableZoom = true;
+	this.zoomSpeed = 1.0;
+
+	// Set to false to disable rotating
+	this.enableRotate = true;
+	this.rotateSpeed = 1.0;
+
+	// Set to false to disable panning
+	this.enablePan = true;
+	this.panSpeed = 1.0;
+	this.screenSpacePanning = false; // if true, pan in screen-space
+	this.keyPanSpeed = 7.0;	// pixels moved per arrow key push
+
+	// Set to true to automatically rotate around the target
+	// If auto-rotate is enabled, you must call controls.update() in your animation loop
+	this.autoRotate = false;
+	this.autoRotateSpeed = 2.0; // 30 seconds per round when fps is 60
+
+	// Set to false to disable use of the keys
+	this.enableKeys = true;
+
+	// The four arrow keys
+	this.keys = { LEFT: 37, UP: 38, RIGHT: 39, BOTTOM: 40 };
+
+	// Mouse buttons
+	this.mouseButtons = { LEFT: THREE.MOUSE.LEFT, MIDDLE: THREE.MOUSE.MIDDLE, RIGHT: THREE.MOUSE.RIGHT };
+
+	// for reset
+	this.target0 = this.target.clone();
+	this.position0 = this.object.position.clone();
+	this.zoom0 = this.object.zoom;
+
+	//
+	// public methods
+	//
+
+	this.getPolarAngle = function () {
+
+		return spherical.phi;
+
+	};
+
+	this.getAzimuthalAngle = function () {
+
+		return spherical.theta;
+
+	};
+
+	this.saveState = function () {
+
+		scope.target0.copy( scope.target );
+		scope.position0.copy( scope.object.position );
+		scope.zoom0 = scope.object.zoom;
+
+	};
+
+	this.reset = function () {
+
+		scope.target.copy( scope.target0 );
+		scope.object.position.copy( scope.position0 );
+		scope.object.zoom = scope.zoom0;
+
+		scope.object.updateProjectionMatrix();
+		scope.dispatchEvent( changeEvent );
+
+		scope.update();
+
+		state = STATE.NONE;
+
+	};
+
+	// this method is exposed, but perhaps it would be better if we can make it private...
+	this.update = function () {
+
+		var offset = new THREE.Vector3();
+
+		// so camera.up is the orbit axis
+		var quat = new THREE.Quaternion().setFromUnitVectors( object.up, new THREE.Vector3( 0, 1, 0 ) );
+		var quatInverse = quat.clone().inverse();
+
+		var lastPosition = new THREE.Vector3();
+		var lastQuaternion = new THREE.Quaternion();
+
+		return function update() {
+
+			var position = scope.object.position;
+
+			offset.copy( position ).sub( scope.target );
+
+			// rotate offset to "y-axis-is-up" space
+			offset.applyQuaternion( quat );
+
+			// angle from z-axis around y-axis
+			spherical.setFromVector3( offset );
+
+			if ( scope.autoRotate && state === STATE.NONE ) {
+
+				rotateLeft( getAutoRotationAngle() );
+
+			}
+
+			spherical.theta += sphericalDelta.theta;
+			spherical.phi += sphericalDelta.phi;
+
+			// restrict theta to be between desired limits
+			spherical.theta = Math.max( scope.minAzimuthAngle, Math.min( scope.maxAzimuthAngle, spherical.theta ) );
+
+			// restrict phi to be between desired limits
+			spherical.phi = Math.max( scope.minPolarAngle, Math.min( scope.maxPolarAngle, spherical.phi ) );
+
+			spherical.makeSafe();
+
+
+			spherical.radius *= scale;
+
+			// restrict radius to be between desired limits
+			spherical.radius = Math.max( scope.minDistance, Math.min( scope.maxDistance, spherical.radius ) );
+
+			// move target to panned location
+			scope.target.add( panOffset );
+
+			offset.setFromSpherical( spherical );
+
+			// rotate offset back to "camera-up-vector-is-up" space
+			offset.applyQuaternion( quatInverse );
+
+			position.copy( scope.target ).add( offset );
+
+			scope.object.lookAt( scope.target );
+
+			if ( scope.enableDamping === true ) {
+
+				sphericalDelta.theta *= ( 1 - scope.dampingFactor );
+				sphericalDelta.phi *= ( 1 - scope.dampingFactor );
+
+				panOffset.multiplyScalar( 1 - scope.dampingFactor );
+
+			} else {
+
+				sphericalDelta.set( 0, 0, 0 );
+
+				panOffset.set( 0, 0, 0 );
+
+			}
+
+			scale = 1;
+
+			// update condition is:
+			// min(camera displacement, camera rotation in radians)^2 > EPS
+			// using small-angle approximation cos(x/2) = 1 - x^2 / 8
+
+			if ( zoomChanged ||
+				lastPosition.distanceToSquared( scope.object.position ) > EPS ||
+				8 * ( 1 - lastQuaternion.dot( scope.object.quaternion ) ) > EPS ) {
+
+				scope.dispatchEvent( changeEvent );
+
+				lastPosition.copy( scope.object.position );
+				lastQuaternion.copy( scope.object.quaternion );
+				zoomChanged = false;
+
+				return true;
+
+			}
+
+			return false;
+
+		};
+
+	}();
+
+	this.dispose = function () {
+
+		scope.domElement.removeEventListener( 'contextmenu', onContextMenu, false );
+		scope.domElement.removeEventListener( 'mousedown', onMouseDown, false );
+		scope.domElement.removeEventListener( 'wheel', onMouseWheel, false );
+
+		scope.domElement.removeEventListener( 'touchstart', onTouchStart, false );
+		scope.domElement.removeEventListener( 'touchend', onTouchEnd, false );
+		scope.domElement.removeEventListener( 'touchmove', onTouchMove, false );
+
+		document.removeEventListener( 'mousemove', onMouseMove, false );
+		document.removeEventListener( 'mouseup', onMouseUp, false );
+
+		window.removeEventListener( 'keydown', onKeyDown, false );
+
+		//scope.dispatchEvent( { type: 'dispose' } ); // should this be added here?
+
+	};
+
+	//
+	// internals
+	//
+
+	var scope = this;
+
+	var changeEvent = { type: 'change' };
+	var startEvent = { type: 'start' };
+	var endEvent = { type: 'end' };
+
+	var STATE = { NONE: - 1, ROTATE: 0, DOLLY: 1, PAN: 2, TOUCH_ROTATE: 3, TOUCH_DOLLY_PAN: 4 };
+
+	var state = STATE.NONE;
+
+	var EPS = 0.000001;
+
+	// current position in spherical coordinates
+	var spherical = new THREE.Spherical();
+	var sphericalDelta = new THREE.Spherical();
+
+	var scale = 1;
+	var panOffset = new THREE.Vector3();
+	var zoomChanged = false;
+
+	var rotateStart = new THREE.Vector2();
+	var rotateEnd = new THREE.Vector2();
+	var rotateDelta = new THREE.Vector2();
+
+	var panStart = new THREE.Vector2();
+	var panEnd = new THREE.Vector2();
+	var panDelta = new THREE.Vector2();
+
+	var dollyStart = new THREE.Vector2();
+	var dollyEnd = new THREE.Vector2();
+	var dollyDelta = new THREE.Vector2();
+
+	function getAutoRotationAngle() {
+
+		return 2 * Math.PI / 60 / 60 * scope.autoRotateSpeed;
+
+	}
+
+	function getZoomScale() {
+
+		return Math.pow( 0.95, scope.zoomSpeed );
+
+	}
+
+	function rotateLeft( angle ) {
+
+		sphericalDelta.theta -= angle;
+
+	}
+
+	function rotateUp( angle ) {
+
+		sphericalDelta.phi -= angle;
+
+	}
+
+	var panLeft = function () {
+
+		var v = new THREE.Vector3();
+
+		return function panLeft( distance, objectMatrix ) {
+
+			v.setFromMatrixColumn( objectMatrix, 0 ); // get X column of objectMatrix
+			v.multiplyScalar( - distance );
+
+			panOffset.add( v );
+
+		};
+
+	}();
+
+	var panUp = function () {
+
+		var v = new THREE.Vector3();
+
+		return function panUp( distance, objectMatrix ) {
+
+			if ( scope.screenSpacePanning === true ) {
+
+				v.setFromMatrixColumn( objectMatrix, 1 );
+
+			} else {
+
+				v.setFromMatrixColumn( objectMatrix, 0 );
+				v.crossVectors( scope.object.up, v );
+
+			}
+
+			v.multiplyScalar( distance );
+
+			panOffset.add( v );
+
+		};
+
+	}();
+
+	// deltaX and deltaY are in pixels; right and down are positive
+	var pan = function () {
+
+		var offset = new THREE.Vector3();
+
+		return function pan( deltaX, deltaY ) {
+
+			var element = scope.domElement === document ? scope.domElement.body : scope.domElement;
+
+			if ( scope.object.isPerspectiveCamera ) {
+
+				// perspective
+				var position = scope.object.position;
+				offset.copy( position ).sub( scope.target );
+				var targetDistance = offset.length();
+
+				// half of the fov is center to top of screen
+				targetDistance *= Math.tan( ( scope.object.fov / 2 ) * Math.PI / 180.0 );
+
+				// we use only clientHeight here so aspect ratio does not distort speed
+				panLeft( 2 * deltaX * targetDistance / element.clientHeight, scope.object.matrix );
+				panUp( 2 * deltaY * targetDistance / element.clientHeight, scope.object.matrix );
+
+			} else if ( scope.object.isOrthographicCamera ) {
+
+				// orthographic
+				panLeft( deltaX * ( scope.object.right - scope.object.left ) / scope.object.zoom / element.clientWidth, scope.object.matrix );
+				panUp( deltaY * ( scope.object.top - scope.object.bottom ) / scope.object.zoom / element.clientHeight, scope.object.matrix );
+
+			} else {
+
+				// camera neither orthographic nor perspective
+				console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - pan disabled.' );
+				scope.enablePan = false;
+
+			}
+
+		};
+
+	}();
+
+	function dollyIn( dollyScale ) {
+
+		if ( scope.object.isPerspectiveCamera ) {
+
+			scale /= dollyScale;
+
+		} else if ( scope.object.isOrthographicCamera ) {
+
+			scope.object.zoom = Math.max( scope.minZoom, Math.min( scope.maxZoom, scope.object.zoom * dollyScale ) );
+			scope.object.updateProjectionMatrix();
+			zoomChanged = true;
+
+		} else {
+
+			console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - dolly/zoom disabled.' );
+			scope.enableZoom = false;
+
+		}
+
+	}
+
+	function dollyOut( dollyScale ) {
+
+		if ( scope.object.isPerspectiveCamera ) {
+
+			scale *= dollyScale;
+
+		} else if ( scope.object.isOrthographicCamera ) {
+
+			scope.object.zoom = Math.max( scope.minZoom, Math.min( scope.maxZoom, scope.object.zoom / dollyScale ) );
+			scope.object.updateProjectionMatrix();
+			zoomChanged = true;
+
+		} else {
+
+			console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - dolly/zoom disabled.' );
+			scope.enableZoom = false;
+
+		}
+
+	}
+
+	//
+	// event callbacks - update the object state
+	//
+
+	function handleMouseDownRotate( event ) {
+
+		//console.log( 'handleMouseDownRotate' );
+
+		rotateStart.set( event.clientX, event.clientY );
+
+	}
+
+	function handleMouseDownDolly( event ) {
+
+		//console.log( 'handleMouseDownDolly' );
+
+		dollyStart.set( event.clientX, event.clientY );
+
+	}
+
+	function handleMouseDownPan( event ) {
+
+		//console.log( 'handleMouseDownPan' );
+
+		panStart.set( event.clientX, event.clientY );
+
+	}
+
+	function handleMouseMoveRotate( event ) {
+
+		//console.log( 'handleMouseMoveRotate' );
+
+		rotateEnd.set( event.clientX, event.clientY );
+
+		rotateDelta.subVectors( rotateEnd, rotateStart ).multiplyScalar( scope.rotateSpeed );
+
+		var element = scope.domElement === document ? scope.domElement.body : scope.domElement;
+
+		rotateLeft( 2 * Math.PI * rotateDelta.x / element.clientHeight ); // yes, height
+
+		rotateUp( 2 * Math.PI * rotateDelta.y / element.clientHeight );
+
+		rotateStart.copy( rotateEnd );
+
+		scope.update();
+
+	}
+
+	function handleMouseMoveDolly( event ) {
+
+		//console.log( 'handleMouseMoveDolly' );
+
+		dollyEnd.set( event.clientX, event.clientY );
+
+		dollyDelta.subVectors( dollyEnd, dollyStart );
+
+		if ( dollyDelta.y > 0 ) {
+
+			dollyIn( getZoomScale() );
+
+		} else if ( dollyDelta.y < 0 ) {
+
+			dollyOut( getZoomScale() );
+
+		}
+
+		dollyStart.copy( dollyEnd );
+
+		scope.update();
+
+	}
+
+	function handleMouseMovePan( event ) {
+
+		//console.log( 'handleMouseMovePan' );
+
+		panEnd.set( event.clientX, event.clientY );
+
+		panDelta.subVectors( panEnd, panStart ).multiplyScalar( scope.panSpeed );
+
+		pan( panDelta.x, panDelta.y );
+
+		panStart.copy( panEnd );
+
+		scope.update();
+
+	}
+
+	function handleMouseUp( event ) {
+
+		// console.log( 'handleMouseUp' );
+
+	}
+
+	function handleMouseWheel( event ) {
+
+		// console.log( 'handleMouseWheel' );
+
+		if ( event.deltaY < 0 ) {
+
+			dollyOut( getZoomScale() );
+
+		} else if ( event.deltaY > 0 ) {
+
+			dollyIn( getZoomScale() );
+
+		}
+
+		scope.update();
+
+	}
+
+	function handleKeyDown( event ) {
+
+		//console.log( 'handleKeyDown' );
+
+		switch ( event.keyCode ) {
+
+			case scope.keys.UP:
+				pan( 0, scope.keyPanSpeed );
+				scope.update();
+				break;
+
+			case scope.keys.BOTTOM:
+				pan( 0, - scope.keyPanSpeed );
+				scope.update();
+				break;
+
+			case scope.keys.LEFT:
+				pan( scope.keyPanSpeed, 0 );
+				scope.update();
+				break;
+
+			case scope.keys.RIGHT:
+				pan( - scope.keyPanSpeed, 0 );
+				scope.update();
+				break;
+
+		}
+
+	}
+
+	function handleTouchStartRotate( event ) {
+
+		//console.log( 'handleTouchStartRotate' );
+
+		rotateStart.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
+
+	}
+
+	function handleTouchStartDollyPan( event ) {
+
+		//console.log( 'handleTouchStartDollyPan' );
+
+		if ( scope.enableZoom ) {
+
+			var dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
+			var dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
+
+			var distance = Math.sqrt( dx * dx + dy * dy );
+
+			dollyStart.set( 0, distance );
+
+		}
+
+		if ( scope.enablePan ) {
+
+			var x = 0.5 * ( event.touches[ 0 ].pageX + event.touches[ 1 ].pageX );
+			var y = 0.5 * ( event.touches[ 0 ].pageY + event.touches[ 1 ].pageY );
+
+			panStart.set( x, y );
+
+		}
+
+	}
+
+	function handleTouchMoveRotate( event ) {
+
+		//console.log( 'handleTouchMoveRotate' );
+
+		rotateEnd.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
+
+		rotateDelta.subVectors( rotateEnd, rotateStart ).multiplyScalar( scope.rotateSpeed );
+
+		var element = scope.domElement === document ? scope.domElement.body : scope.domElement;
+
+		rotateLeft( 2 * Math.PI * rotateDelta.x / element.clientHeight ); // yes, height
+
+		rotateUp( 2 * Math.PI * rotateDelta.y / element.clientHeight );
+
+		rotateStart.copy( rotateEnd );
+
+		scope.update();
+
+	}
+
+	function handleTouchMoveDollyPan( event ) {
+
+		//console.log( 'handleTouchMoveDollyPan' );
+
+		if ( scope.enableZoom ) {
+
+			var dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
+			var dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
+
+			var distance = Math.sqrt( dx * dx + dy * dy );
+
+			dollyEnd.set( 0, distance );
+
+			dollyDelta.set( 0, Math.pow( dollyEnd.y / dollyStart.y, scope.zoomSpeed ) );
+
+			dollyIn( dollyDelta.y );
+
+			dollyStart.copy( dollyEnd );
+
+		}
+
+		if ( scope.enablePan ) {
+
+			var x = 0.5 * ( event.touches[ 0 ].pageX + event.touches[ 1 ].pageX );
+			var y = 0.5 * ( event.touches[ 0 ].pageY + event.touches[ 1 ].pageY );
+
+			panEnd.set( x, y );
+
+			panDelta.subVectors( panEnd, panStart ).multiplyScalar( scope.panSpeed );
+
+			pan( panDelta.x, panDelta.y );
+
+			panStart.copy( panEnd );
+
+		}
+
+		scope.update();
+
+	}
+
+	function handleTouchEnd( event ) {
+
+		//console.log( 'handleTouchEnd' );
+
+	}
+
+	//
+	// event handlers - FSM: listen for events and reset state
+	//
+
+	function onMouseDown( event ) {
+
+		if ( scope.enabled === false ) return;
+
+		event.preventDefault();
+
+		switch ( event.button ) {
+
+			case scope.mouseButtons.LEFT:
+
+				if ( event.ctrlKey || event.metaKey || event.shiftKey ) {
+
+					if ( scope.enablePan === false ) return;
+
+					handleMouseDownPan( event );
+
+					state = STATE.PAN;
+
+				} else {
+
+					if ( scope.enableRotate === false ) return;
+
+					handleMouseDownRotate( event );
+
+					state = STATE.ROTATE;
+
+				}
+
+				break;
+
+			case scope.mouseButtons.MIDDLE:
+
+				if ( scope.enableZoom === false ) return;
+
+				handleMouseDownDolly( event );
+
+				state = STATE.DOLLY;
+
+				break;
+
+			case scope.mouseButtons.RIGHT:
+
+				if ( scope.enablePan === false ) return;
+
+				handleMouseDownPan( event );
+
+				state = STATE.PAN;
+
+				break;
+
+		}
+
+		if ( state !== STATE.NONE ) {
+
+			document.addEventListener( 'mousemove', onMouseMove, false );
+			document.addEventListener( 'mouseup', onMouseUp, false );
+
+			scope.dispatchEvent( startEvent );
+
+		}
+
+	}
+
+	function onMouseMove( event ) {
+
+		if ( scope.enabled === false ) return;
+
+		event.preventDefault();
+
+		switch ( state ) {
+
+			case STATE.ROTATE:
+
+				if ( scope.enableRotate === false ) return;
+
+				handleMouseMoveRotate( event );
+
+				break;
+
+			case STATE.DOLLY:
+
+				if ( scope.enableZoom === false ) return;
+
+				handleMouseMoveDolly( event );
+
+				break;
+
+			case STATE.PAN:
+
+				if ( scope.enablePan === false ) return;
+
+				handleMouseMovePan( event );
+
+				break;
+
+		}
+
+	}
+
+	function onMouseUp( event ) {
+
+		if ( scope.enabled === false ) return;
+
+		handleMouseUp( event );
+
+		document.removeEventListener( 'mousemove', onMouseMove, false );
+		document.removeEventListener( 'mouseup', onMouseUp, false );
+
+		scope.dispatchEvent( endEvent );
+
+		state = STATE.NONE;
+
+	}
+
+	function onMouseWheel( event ) {
+
+		if ( scope.enabled === false || scope.enableZoom === false || ( state !== STATE.NONE && state !== STATE.ROTATE ) ) return;
+
+		event.preventDefault();
+		event.stopPropagation();
+
+		scope.dispatchEvent( startEvent );
+
+		handleMouseWheel( event );
+
+		scope.dispatchEvent( endEvent );
+
+	}
+
+	function onKeyDown( event ) {
+
+		if ( scope.enabled === false || scope.enableKeys === false || scope.enablePan === false ) return;
+
+		handleKeyDown( event );
+
+	}
+
+	function onTouchStart( event ) {
+
+		if ( scope.enabled === false ) return;
+
+		event.preventDefault();
+
+		switch ( event.touches.length ) {
+
+			case 1:	// one-fingered touch: rotate
+
+				if ( scope.enableRotate === false ) return;
+
+				handleTouchStartRotate( event );
+
+				state = STATE.TOUCH_ROTATE;
+
+				break;
+
+			case 2:	// two-fingered touch: dolly-pan
+
+				if ( scope.enableZoom === false && scope.enablePan === false ) return;
+
+				handleTouchStartDollyPan( event );
+
+				state = STATE.TOUCH_DOLLY_PAN;
+
+				break;
+
+			default:
+
+				state = STATE.NONE;
+
+		}
+
+		if ( state !== STATE.NONE ) {
+
+			scope.dispatchEvent( startEvent );
+
+		}
+
+	}
+
+	function onTouchMove( event ) {
+
+		if ( scope.enabled === false ) return;
+
+		event.preventDefault();
+		event.stopPropagation();
+
+		switch ( event.touches.length ) {
+
+			case 1: // one-fingered touch: rotate
+
+				if ( scope.enableRotate === false ) return;
+				if ( state !== STATE.TOUCH_ROTATE ) return; // is this needed?
+
+				handleTouchMoveRotate( event );
+
+				break;
+
+			case 2: // two-fingered touch: dolly-pan
+
+				if ( scope.enableZoom === false && scope.enablePan === false ) return;
+				if ( state !== STATE.TOUCH_DOLLY_PAN ) return; // is this needed?
+
+				handleTouchMoveDollyPan( event );
+
+				break;
+
+			default:
+
+				state = STATE.NONE;
+
+		}
+
+	}
+
+	function onTouchEnd( event ) {
+
+		if ( scope.enabled === false ) return;
+
+		handleTouchEnd( event );
+
+		scope.dispatchEvent( endEvent );
+
+		state = STATE.NONE;
+
+	}
+
+	function onContextMenu( event ) {
+
+		if ( scope.enabled === false ) return;
+
+		event.preventDefault();
+
+	}
+
+	//
+
+	scope.domElement.addEventListener( 'contextmenu', onContextMenu, false );
+
+	scope.domElement.addEventListener( 'mousedown', onMouseDown, false );
+	scope.domElement.addEventListener( 'wheel', onMouseWheel, false );
+
+	scope.domElement.addEventListener( 'touchstart', onTouchStart, false );
+	scope.domElement.addEventListener( 'touchend', onTouchEnd, false );
+	scope.domElement.addEventListener( 'touchmove', onTouchMove, false );
+
+	window.addEventListener( 'keydown', onKeyDown, false );
+
+	// force an update at start
+
+	this.update();
+
+};
+
+THREE.OrbitControls.prototype = Object.create( THREE.EventDispatcher.prototype );
+THREE.OrbitControls.prototype.constructor = THREE.OrbitControls;
+
+Object.defineProperties( THREE.OrbitControls.prototype, {
+
+	center: {
+
+		get: function () {
+
+			console.warn( 'THREE.OrbitControls: .center has been renamed to .target' );
+			return this.target;
+
+		}
+
+	},
+
+	// backward compatibility
+
+	noZoom: {
+
+		get: function () {
+
+			console.warn( 'THREE.OrbitControls: .noZoom has been deprecated. Use .enableZoom instead.' );
+			return ! this.enableZoom;
+
+		},
+
+		set: function ( value ) {
+
+			console.warn( 'THREE.OrbitControls: .noZoom has been deprecated. Use .enableZoom instead.' );
+			this.enableZoom = ! value;
+
+		}
+
+	},
+
+	noRotate: {
+
+		get: function () {
+
+			console.warn( 'THREE.OrbitControls: .noRotate has been deprecated. Use .enableRotate instead.' );
+			return ! this.enableRotate;
+
+		},
+
+		set: function ( value ) {
+
+			console.warn( 'THREE.OrbitControls: .noRotate has been deprecated. Use .enableRotate instead.' );
+			this.enableRotate = ! value;
+
+		}
+
+	},
+
+	noPan: {
+
+		get: function () {
+
+			console.warn( 'THREE.OrbitControls: .noPan has been deprecated. Use .enablePan instead.' );
+			return ! this.enablePan;
+
+		},
+
+		set: function ( value ) {
+
+			console.warn( 'THREE.OrbitControls: .noPan has been deprecated. Use .enablePan instead.' );
+			this.enablePan = ! value;
+
+		}
+
+	},
+
+	noKeys: {
+
+		get: function () {
+
+			console.warn( 'THREE.OrbitControls: .noKeys has been deprecated. Use .enableKeys instead.' );
+			return ! this.enableKeys;
+
+		},
+
+		set: function ( value ) {
+
+			console.warn( 'THREE.OrbitControls: .noKeys has been deprecated. Use .enableKeys instead.' );
+			this.enableKeys = ! value;
+
+		}
+
+	},
+
+	staticMoving: {
+
+		get: function () {
+
+			console.warn( 'THREE.OrbitControls: .staticMoving has been deprecated. Use .enableDamping instead.' );
+			return ! this.enableDamping;
+
+		},
+
+		set: function ( value ) {
+
+			console.warn( 'THREE.OrbitControls: .staticMoving has been deprecated. Use .enableDamping instead.' );
+			this.enableDamping = ! value;
+
+		}
+
+	},
+
+	dynamicDampingFactor: {
+
+		get: function () {
+
+			console.warn( 'THREE.OrbitControls: .dynamicDampingFactor has been renamed. Use .dampingFactor instead.' );
+			return this.dampingFactor;
+
+		},
+
+		set: function ( value ) {
+
+			console.warn( 'THREE.OrbitControls: .dynamicDampingFactor has been renamed. Use .dampingFactor instead.' );
+			this.dampingFactor = value;
+
+		}
+
+	}
+
+} );
+/**
  * Tween.js - Licensed under the MIT license
  * https://github.com/tweenjs/tween.js
  * ----------------------------------------------
@@ -52021,7 +53072,6 @@ TWEEN.Interpolation = {
             this.updateProjectionMatrix();
         }
     };
-    //# sourceMappingURL=THREE.OrthographicCamera.js.map
 
     THREE.PerspectiveCamera.prototype.orthoSize = function (x, c) {
         var distance = x.distanceTo(c);
@@ -52034,9 +53084,6 @@ TWEEN.Interpolation = {
             z: distance
         };
     };
-    //# sourceMappingURL=THREE.PerspectiveCamera.js.map
-
-    //# sourceMappingURL=Index.js.map
 
     /*
      * @Author: kekeqy
@@ -52741,7 +53788,6 @@ TWEEN.Interpolation = {
         });
         return BaseObject;
     }());
-    //# sourceMappingURL=BaseObject.js.map
 
     var BaseStyle = /** @class */ (function () {
         function BaseStyle() {
@@ -52892,7 +53938,6 @@ TWEEN.Interpolation = {
         });
         return BaseStyle;
     }());
-    //# sourceMappingURL=BaseStyle.js.map
 
     /*
      * @Author: kekeqy
@@ -52931,600 +53976,12 @@ TWEEN.Interpolation = {
          */
         CameraView[CameraView["Perspective"] = 6] = "Perspective";
     })(exports.CameraView || (exports.CameraView = {}));
-    //# sourceMappingURL=CameraView.js.map
-
-    /*! *****************************************************************************
-    Copyright (c) Microsoft Corporation. All rights reserved.
-    Licensed under the Apache License, Version 2.0 (the "License"); you may not use
-    this file except in compliance with the License. You may obtain a copy of the
-    License at http://www.apache.org/licenses/LICENSE-2.0
-
-    THIS CODE IS PROVIDED ON AN *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-    KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
-    WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
-    MERCHANTABLITY OR NON-INFRINGEMENT.
-
-    See the Apache Version 2.0 License for specific language governing permissions
-    and limitations under the License.
-    ***************************************************************************** */
-    /* global Reflect, Promise */
-
-    var extendStatics = function(d, b) {
-        extendStatics = Object.setPrototypeOf ||
-            ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
-            function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
-        return extendStatics(d, b);
-    };
-
-    function __extends(d, b) {
-        extendStatics(d, b);
-        function __() { this.constructor = d; }
-        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
-    }
-
-    var STATE = {
-        NONE: -1,
-        ROTATE: 0,
-        DOLLY: 1,
-        PAN: 2,
-        TOUCH_ROTATE: 3,
-        TOUCH_DOLLY: 4,
-        TOUCH_PAN: 5
-    };
-    var CHANGE_EVENT = { type: 'change' };
-    var START_EVENT = { type: 'start' };
-    var END_EVENT = { type: 'end' };
-    var EPS = 0.000001;
-    /**
-    * @author qiao / https://github.com/qiao
-    * @author mrdoob / http://mrdoob.com
-    * @author alteredq / http://alteredqualia.com/
-    * @author WestLangley / http://github.com/WestLangley
-    * @author erich666 / http://erichaines.com
-    * @author nicolaspanel / http://github.com/nicolaspanel
-    *
-    * 这组控件执行轨道、缩放和平移操作。
-    * 与TrackballControls不同，它维护“向上”的方向对象。向上(默认为+Y)
-    *    Orbit - 鼠标左键/触摸:移动一个手指
-    *    Zoom - 鼠标中键，或鼠标滚轮/触摸:两个手指展开或挤压
-    *    Pan - 鼠标右键，或箭头键/触摸:三指滑动
-    */
-    var OrbitControls = /** @class */ (function (_super) {
-        __extends(OrbitControls, _super);
-        function OrbitControls(object, domElement, domWindow) {
-            var _this = _super.call(this) || this;
-            _this.object = object;
-            _this.domElement = (domElement !== undefined) ? domElement : document;
-            _this.window = (domWindow !== undefined) ? domWindow : window;
-            // 设置为false以禁用此控件
-            _this.enabled = true;
-            // “目标”设置焦点的位置，即物体围绕的轨道
-            _this.target = new THREE.Vector3();
-            // 你能移动多远(仅透视摄像机)
-            _this.minDistance = 0;
-            _this.maxDistance = Infinity;
-            // 你可以放大和缩小多远(仅限正投影相机)
-            _this.minZoom = 0;
-            _this.maxZoom = Infinity;
-            // 垂直轨道的距离，上限和下限。
-            // 范围是0到Math.PI弧度。
-            _this.minPolarAngle = 0; // 弧度
-            _this.maxPolarAngle = Math.PI; // 弧度
-            // 水平轨道的距离，上限和下限。
-            // 如果设置，必须是区间的子区间 [ - Math.PI, Math.PI ].
-            _this.minAzimuthAngle = -Infinity; // 弧度
-            _this.maxAzimuthAngle = Infinity; // 弧度
-            // 设为真，启用阻尼(惯性)
-            // 如果启用阻尼，则必须在动画循环中调用controls.update()
-            _this.enableDamping = false;
-            _this.dampingFactor = 0.25;
-            // 这个选项实际上可以实现娃娃化;左为“缩放”，向后兼容。
-            // 设置为false以禁用缩放
-            _this.enableZoom = true;
-            _this.zoomSpeed = 1.0;
-            // 设置为false禁用旋转
-            _this.enableRotate = true;
-            _this.rotateSpeed = 1.0;
-            // 设置为false以禁用平移
-            _this.enablePan = true;
-            _this.keyPanSpeed = 7.0; // 像素移动每箭头键推动
-            // 设置为true以自动围绕目标旋转
-            // 如果启用了自动旋转，则必须在动画循环中调用controls.update()
-            _this.autoRotate = false;
-            _this.autoRotateSpeed = 2.0; //fps为60时，每轮30秒
-            // 设置为false以禁用键的使用
-            _this.enableKeys = true;
-            // 四个箭头键
-            _this.keys = { LEFT: 37, UP: 38, RIGHT: 39, BOTTOM: 40 };
-            // 鼠标按钮
-            _this.mouseButtons = { ORBIT: THREE.MOUSE.LEFT, ZOOM: THREE.MOUSE.MIDDLE, PAN: THREE.MOUSE.RIGHT };
-            // 用于重置
-            _this.target0 = _this.target.clone();
-            _this.position0 = _this.object.position.clone();
-            _this.zoom0 = _this.object.zoom;
-            // 更新加速
-            _this.updateOffset = new THREE.Vector3();
-            // 所以camera.up是轨道轴
-            _this.updateQuat = new THREE.Quaternion().setFromUnitVectors(object.up, new THREE.Vector3(0, 1, 0));
-            _this.updateQuatInverse = _this.updateQuat.clone().inverse();
-            _this.updateLastPosition = new THREE.Vector3();
-            _this.updateLastQuaternion = new THREE.Quaternion();
-            _this.state = STATE.NONE;
-            _this.scale = 1;
-            // 球坐标下的当前位置
-            _this.spherical = new THREE.Spherical();
-            _this.sphericalDelta = new THREE.Spherical();
-            _this.panOffset = new THREE.Vector3();
-            _this.zoomChanged = false;
-            _this.rotateStart = new THREE.Vector2();
-            _this.rotateEnd = new THREE.Vector2();
-            _this.rotateDelta = new THREE.Vector2();
-            _this.panStart = new THREE.Vector2();
-            _this.panEnd = new THREE.Vector2();
-            _this.panDelta = new THREE.Vector2();
-            _this.dollyStart = new THREE.Vector2();
-            _this.dollyEnd = new THREE.Vector2();
-            _this.dollyDelta = new THREE.Vector2();
-            _this.panLeftV = new THREE.Vector3();
-            _this.panUpV = new THREE.Vector3();
-            _this.panInternalOffset = new THREE.Vector3();
-            // 事件处理程序- FSM:监听事件并重置状态
-            _this.onMouseDown = function (event) {
-                if (_this.enabled === false)
-                    return;
-                event.preventDefault();
-                if (event.button === _this.mouseButtons.ORBIT) {
-                    if (_this.enableRotate === false)
-                        return;
-                    _this.rotateStart.set(event.clientX, event.clientY);
-                    _this.state = STATE.ROTATE;
-                }
-                else if (event.button === _this.mouseButtons.ZOOM) {
-                    if (_this.enableZoom === false)
-                        return;
-                    _this.dollyStart.set(event.clientX, event.clientY);
-                    _this.state = STATE.DOLLY;
-                }
-                else if (event.button === _this.mouseButtons.PAN) {
-                    if (_this.enablePan === false)
-                        return;
-                    _this.panStart.set(event.clientX, event.clientY);
-                    _this.state = STATE.PAN;
-                }
-                if (_this.state !== STATE.NONE) {
-                    document.addEventListener('mousemove', _this.onMouseMove, false);
-                    document.addEventListener('mouseup', _this.onMouseUp, false);
-                    _this.dispatchEvent(START_EVENT);
-                }
-            };
-            _this.onMouseMove = function (event) {
-                if (_this.enabled === false)
-                    return;
-                event.preventDefault();
-                if (_this.state === STATE.ROTATE) {
-                    if (_this.enableRotate === false)
-                        return;
-                    _this.rotateEnd.set(event.clientX, event.clientY);
-                    _this.rotateDelta.subVectors(_this.rotateEnd, _this.rotateStart);
-                    var element = _this.domElement === document ? _this.domElement.body : _this.domElement;
-                    // 在整个屏幕上旋转360度
-                    _this.rotateLeft(2 * Math.PI * _this.rotateDelta.x / element.clientWidth * _this.rotateSpeed);
-                    // 在整个屏幕上上下旋转试图达到360度，但仅限于180度
-                    _this.rotateUp(2 * Math.PI * _this.rotateDelta.y / element.clientHeight * _this.rotateSpeed);
-                    _this.rotateStart.copy(_this.rotateEnd);
-                    _this.update();
-                }
-                else if (_this.state === STATE.DOLLY) {
-                    if (_this.enableZoom === false)
-                        return;
-                    _this.dollyEnd.set(event.clientX, event.clientY);
-                    _this.dollyDelta.subVectors(_this.dollyEnd, _this.dollyStart);
-                    if (_this.dollyDelta.y > 0) {
-                        _this.dollyIn(_this.getZoomScale());
-                    }
-                    else if (_this.dollyDelta.y < 0) {
-                        _this.dollyOut(_this.getZoomScale());
-                    }
-                    _this.dollyStart.copy(_this.dollyEnd);
-                    _this.update();
-                }
-                else if (_this.state === STATE.PAN) {
-                    if (_this.enablePan === false)
-                        return;
-                    _this.panEnd.set(event.clientX, event.clientY);
-                    _this.panDelta.subVectors(_this.panEnd, _this.panStart);
-                    _this.pan(_this.panDelta.x, _this.panDelta.y);
-                    _this.panStart.copy(_this.panEnd);
-                    _this.update();
-                }
-            };
-            _this.onMouseUp = function (event) {
-                if (_this.enabled === false)
-                    return;
-                document.removeEventListener('mousemove', _this.onMouseMove, false);
-                document.removeEventListener('mouseup', _this.onMouseUp, false);
-                _this.dispatchEvent(END_EVENT);
-                _this.state = STATE.NONE;
-            };
-            _this.onMouseWheel = function (event) {
-                if (_this.enabled === false || _this.enableZoom === false || (_this.state !== STATE.NONE && _this.state !== STATE.ROTATE))
-                    return;
-                event.preventDefault();
-                event.stopPropagation();
-                if (event.deltaY < 0) {
-                    _this.dollyOut(_this.getZoomScale());
-                }
-                else if (event.deltaY > 0) {
-                    _this.dollyIn(_this.getZoomScale());
-                }
-                _this.update();
-                _this.dispatchEvent(START_EVENT); // 不知道为什么会在这里…
-                _this.dispatchEvent(END_EVENT);
-            };
-            _this.onKeyDown = function (event) {
-                if (_this.enabled === false || _this.enableKeys === false || _this.enablePan === false)
-                    return;
-                switch (event.keyCode) {
-                    case _this.keys.UP:
-                        {
-                            _this.pan(0, _this.keyPanSpeed);
-                            _this.update();
-                        }
-                        break;
-                    case _this.keys.BOTTOM:
-                        {
-                            _this.pan(0, -_this.keyPanSpeed);
-                            _this.update();
-                        }
-                        break;
-                    case _this.keys.LEFT:
-                        {
-                            _this.pan(_this.keyPanSpeed, 0);
-                            _this.update();
-                        }
-                        break;
-                    case _this.keys.RIGHT:
-                        {
-                            _this.pan(-_this.keyPanSpeed, 0);
-                            _this.update();
-                        }
-                        break;
-                }
-            };
-            _this.onTouchStart = function (event) {
-                if (_this.enabled === false)
-                    return;
-                switch (event.touches.length) {
-                    // one-fingered touch: 旋转
-                    case 1:
-                        {
-                            if (_this.enableRotate === false)
-                                return;
-                            _this.rotateStart.set(event.touches[0].pageX, event.touches[0].pageY);
-                            _this.state = STATE.TOUCH_ROTATE;
-                        }
-                        break;
-                    // two-fingered touch: dolly
-                    case 2:
-                        {
-                            if (_this.enableZoom === false)
-                                return;
-                            var dx = event.touches[0].pageX - event.touches[1].pageX;
-                            var dy = event.touches[0].pageY - event.touches[1].pageY;
-                            var distance = Math.sqrt(dx * dx + dy * dy);
-                            _this.dollyStart.set(0, distance);
-                            _this.state = STATE.TOUCH_DOLLY;
-                        }
-                        break;
-                    // three-fingered touch: pan
-                    case 3:
-                        {
-                            if (_this.enablePan === false)
-                                return;
-                            _this.panStart.set(event.touches[0].pageX, event.touches[0].pageY);
-                            _this.state = STATE.TOUCH_PAN;
-                        }
-                        break;
-                    default: {
-                        _this.state = STATE.NONE;
-                    }
-                }
-                if (_this.state !== STATE.NONE) {
-                    _this.dispatchEvent(START_EVENT);
-                }
-            };
-            _this.onTouchMove = function (event) {
-                if (_this.enabled === false)
-                    return;
-                event.preventDefault();
-                event.stopPropagation();
-                switch (event.touches.length) {
-                    // one-fingered touch: rotate
-                    case 1:
-                        {
-                            if (_this.enableRotate === false)
-                                return;
-                            if (_this.state !== STATE.TOUCH_ROTATE)
-                                return; // is this needed?...
-                            _this.rotateEnd.set(event.touches[0].pageX, event.touches[0].pageY);
-                            _this.rotateDelta.subVectors(_this.rotateEnd, _this.rotateStart);
-                            var element = _this.domElement === document ? _this.domElement.body : _this.domElement;
-                            // 在整个屏幕上旋转360度
-                            _this.rotateLeft(2 * Math.PI * _this.rotateDelta.x / element.clientWidth * _this.rotateSpeed);
-                            // 在整个屏幕上上下旋转试图达到360度，但仅限于180度
-                            _this.rotateUp(2 * Math.PI * _this.rotateDelta.y / element.clientHeight * _this.rotateSpeed);
-                            _this.rotateStart.copy(_this.rotateEnd);
-                            _this.update();
-                        }
-                        break;
-                    // two-fingered touch: dolly
-                    case 2:
-                        {
-                            if (_this.enableZoom === false)
-                                return;
-                            if (_this.state !== STATE.TOUCH_DOLLY)
-                                return; // is this needed?...
-                            //console.log( 'handleTouchMoveDolly' );
-                            var dx = event.touches[0].pageX - event.touches[1].pageX;
-                            var dy = event.touches[0].pageY - event.touches[1].pageY;
-                            var distance = Math.sqrt(dx * dx + dy * dy);
-                            _this.dollyEnd.set(0, distance);
-                            _this.dollyDelta.subVectors(_this.dollyEnd, _this.dollyStart);
-                            if (_this.dollyDelta.y > 0) {
-                                _this.dollyOut(_this.getZoomScale());
-                            }
-                            else if (_this.dollyDelta.y < 0) {
-                                _this.dollyIn(_this.getZoomScale());
-                            }
-                            _this.dollyStart.copy(_this.dollyEnd);
-                            _this.update();
-                        }
-                        break;
-                    // three-fingered touch: pan
-                    case 3:
-                        {
-                            if (_this.enablePan === false)
-                                return;
-                            if (_this.state !== STATE.TOUCH_PAN)
-                                return; // is this needed?...
-                            _this.panEnd.set(event.touches[0].pageX, event.touches[0].pageY);
-                            _this.panDelta.subVectors(_this.panEnd, _this.panStart);
-                            _this.pan(_this.panDelta.x, _this.panDelta.y);
-                            _this.panStart.copy(_this.panEnd);
-                            _this.update();
-                        }
-                        break;
-                    default: {
-                        _this.state = STATE.NONE;
-                    }
-                }
-            };
-            _this.onTouchEnd = function (event) {
-                if (_this.enabled === false)
-                    return;
-                _this.dispatchEvent(END_EVENT);
-                _this.state = STATE.NONE;
-            };
-            _this.onContextMenu = function (event) {
-                event.preventDefault();
-            };
-            _this.domElement.addEventListener('contextmenu', _this.onContextMenu, false);
-            _this.domElement.addEventListener('mousedown', _this.onMouseDown, false);
-            _this.domElement.addEventListener('wheel', _this.onMouseWheel, false);
-            _this.domElement.addEventListener('touchstart', _this.onTouchStart, false);
-            _this.domElement.addEventListener('touchend', _this.onTouchEnd, false);
-            _this.domElement.addEventListener('touchmove', _this.onTouchMove, false);
-            _this.window.addEventListener('keydown', _this.onKeyDown, false);
-            // 在开始时强制更新
-            _this.update();
-            return _this;
-        }
-        OrbitControls.prototype.update = function () {
-            var position = this.object.position;
-            this.updateOffset.copy(position).sub(this.target);
-            // 旋转偏移到“y轴向上”空间
-            this.updateOffset.applyQuaternion(this.updateQuat);
-            // 从z轴到y轴的夹角
-            this.spherical.setFromVector3(this.updateOffset);
-            if (this.autoRotate && this.state === STATE.NONE) {
-                this.rotateLeft(this.getAutoRotationAngle());
-            }
-            this.spherical.theta += this.sphericalDelta.theta;
-            this.spherical.phi += this.sphericalDelta.phi;
-            // 把theta限制在期望的范围内
-            this.spherical.theta = Math.max(this.minAzimuthAngle, Math.min(this.maxAzimuthAngle, this.spherical.theta));
-            // phi限制在期望的极限之间
-            this.spherical.phi = Math.max(this.minPolarAngle, Math.min(this.maxPolarAngle, this.spherical.phi));
-            this.spherical.makeSafe();
-            this.spherical.radius *= this.scale;
-            // 将半径限制在期望的范围内
-            this.spherical.radius = Math.max(this.minDistance, Math.min(this.maxDistance, this.spherical.radius));
-            // 移动目标到平移位置
-            this.target.add(this.panOffset);
-            this.updateOffset.setFromSpherical(this.spherical);
-            // 将偏移量旋转回“camera-up-vector- isup”空间
-            this.updateOffset.applyQuaternion(this.updateQuatInverse);
-            position.copy(this.target).add(this.updateOffset);
-            this.object.lookAt(this.target);
-            if (this.enableDamping === true) {
-                this.sphericalDelta.theta *= (1 - this.dampingFactor);
-                this.sphericalDelta.phi *= (1 - this.dampingFactor);
-            }
-            else {
-                this.sphericalDelta.set(0, 0, 0);
-            }
-            this.scale = 1;
-            this.panOffset.set(0, 0, 0);
-            // 更新的条件是:
-            // min(镜头位移, 摄像机以弧度旋转)^2 > EPS
-            // 利用小角近似值 cos(x/2) = 1 - x^2 / 8
-            if (this.zoomChanged ||
-                this.updateLastPosition.distanceToSquared(this.object.position) > EPS ||
-                8 * (1 - this.updateLastQuaternion.dot(this.object.quaternion)) > EPS) {
-                this.dispatchEvent(CHANGE_EVENT);
-                this.updateLastPosition.copy(this.object.position);
-                this.updateLastQuaternion.copy(this.object.quaternion);
-                this.zoomChanged = false;
-                return true;
-            }
-            return false;
-        };
-        OrbitControls.prototype.panLeft = function (distance, objectMatrix) {
-            this.panLeftV.setFromMatrixColumn(objectMatrix, 0); // 得到objectMatrix的X列
-            this.panLeftV.multiplyScalar(-distance);
-            this.panOffset.add(this.panLeftV);
-        };
-        OrbitControls.prototype.panUp = function (distance, objectMatrix) {
-            this.panUpV.setFromMatrixColumn(objectMatrix, 1); // 得到objectMatrix的Y列
-            this.panUpV.multiplyScalar(distance);
-            this.panOffset.add(this.panUpV);
-        };
-        // deltaX和deltaY是像素单位;右和下都是正数
-        OrbitControls.prototype.pan = function (deltaX, deltaY) {
-            var element = this.domElement === document ? this.domElement.body : this.domElement;
-            if (this._checkPerspectiveCamera(this.object)) {
-                // 透视
-                var position = this.object.position;
-                this.panInternalOffset.copy(position).sub(this.target);
-                var targetDistance = this.panInternalOffset.length();
-                // fov的一半在屏幕的中央到顶部
-                targetDistance *= Math.tan((this.object.fov / 2) * Math.PI / 180.0);
-                // 我们实际上不使用屏幕宽度，因为透视相机是固定在屏幕高度上的
-                this.panLeft(2 * deltaX * targetDistance / element.clientHeight, this.object.matrix);
-                this.panUp(2 * deltaY * targetDistance / element.clientHeight, this.object.matrix);
-            }
-            else if (this._checkOrthographicCamera(this.object)) {
-                // 正交
-                this.panLeft(deltaX * (this.object.right - this.object.left) / this.object.zoom / element.clientWidth, this.object.matrix);
-                this.panUp(deltaY * (this.object.top - this.object.bottom) / this.object.zoom / element.clientHeight, this.object.matrix);
-            }
-            else {
-                // 照相机既不正投影也不透视
-                console.warn('警告:OrbitControls.js遇到一个未知的摄像头类型- 平移禁用。');
-                this.enablePan = false;
-            }
-        };
-        OrbitControls.prototype.dollyIn = function (dollyScale) {
-            if (this._checkPerspectiveCamera(this.object)) {
-                this.scale /= dollyScale;
-            }
-            else if (this._checkOrthographicCamera(this.object)) {
-                this.object.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.object.zoom * dollyScale));
-                this.object.updateProjectionMatrix();
-                this.zoomChanged = true;
-            }
-            else {
-                console.warn('警告:OrbitControls.js遇到一个未知的相机类型-推进/缩放禁用。');
-                this.enableZoom = false;
-            }
-        };
-        OrbitControls.prototype.dollyOut = function (dollyScale) {
-            if (this._checkPerspectiveCamera(this.object)) {
-                this.scale *= dollyScale;
-            }
-            else if (this._checkOrthographicCamera(this.object)) {
-                this.object.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.object.zoom / dollyScale));
-                this.object.updateProjectionMatrix();
-                this.zoomChanged = true;
-            }
-            else {
-                console.warn('警告:OrbitControls.js遇到一个未知的相机类型-推进/缩放禁用。');
-                this.enableZoom = false;
-            }
-        };
-        OrbitControls.prototype.getAutoRotationAngle = function () {
-            return 2 * Math.PI / 60 / 60 * this.autoRotateSpeed;
-        };
-        OrbitControls.prototype.getZoomScale = function () {
-            return Math.pow(0.95, this.zoomSpeed);
-        };
-        OrbitControls.prototype.rotateLeft = function (angle) {
-            this.sphericalDelta.theta -= angle;
-        };
-        OrbitControls.prototype.rotateUp = function (angle) {
-            this.sphericalDelta.phi -= angle;
-        };
-        OrbitControls.prototype.getPolarAngle = function () {
-            return this.spherical.phi;
-        };
-        OrbitControls.prototype.getAzimuthalAngle = function () {
-            return this.spherical.theta;
-        };
-        OrbitControls.prototype.dispose = function () {
-            this.domElement.removeEventListener('contextmenu', this.onContextMenu, false);
-            this.domElement.removeEventListener('mousedown', this.onMouseDown, false);
-            this.domElement.removeEventListener('wheel', this.onMouseWheel, false);
-            this.domElement.removeEventListener('touchstart', this.onTouchStart, false);
-            this.domElement.removeEventListener('touchend', this.onTouchEnd, false);
-            this.domElement.removeEventListener('touchmove', this.onTouchMove, false);
-            document.removeEventListener('mousemove', this.onMouseMove, false);
-            document.removeEventListener('mouseup', this.onMouseUp, false);
-            this.window.removeEventListener('keydown', this.onKeyDown, false);
-            //this.dispatchEvent( { type: 'dispose' } ); // should this be added here?
-        };
-        OrbitControls.prototype.reset = function () {
-            this.target.copy(this.target0);
-            this.object.position.copy(this.position0);
-            this.object.zoom = this.zoom0;
-            this.object.updateProjectionMatrix();
-            this.dispatchEvent(CHANGE_EVENT);
-            this.update();
-            this.state = STATE.NONE;
-        };
-        OrbitControls.prototype.saveState = function () {
-            this.target0.copy(this.target);
-            this.position0.copy(this.object.position);
-            // 检查相机是否具有变焦功能
-            if (this._checkOrthographicCamera(this.object) || this._checkPerspectiveCamera(this.object)) {
-                this.zoom0 = this.object.zoom;
-            }
-        };
-        Object.defineProperty(OrbitControls.prototype, "center", {
-            // 向后兼容
-            get: function () {
-                console.warn('THREE.OrbitControls: .center 已重命名为 .target');
-                return this.target;
-            },
-            enumerable: true,
-            configurable: true
-        });
-        Object.defineProperty(OrbitControls.prototype, "noZoom", {
-            get: function () {
-                console.warn('THREE.OrbitControls: .noZoom 已弃用。 使用 .enableZoom 代替.');
-                return !this.enableZoom;
-            },
-            set: function (value) {
-                console.warn('THREE.OrbitControls: .noZoom 已弃用。 使用 .enableZoom 代替.');
-                this.enableZoom = !value;
-            },
-            enumerable: true,
-            configurable: true
-        });
-        /**
-         * TS typeguard。检查所提供的摄像头是否透视摄像头。
-         * 如果检查通过(返回true)，通过的相机将具有类型 THREE.PerspectiveCamera 在执行检查的if分支中.
-         * @param camera 对象进行检查。
-         */
-        OrbitControls.prototype._checkPerspectiveCamera = function (camera) {
-            return camera.isPerspectiveCamera;
-        };
-        /**
-         * TS typeguard。检查所提供的摄像机是否为正位摄像机。
-         * 如果检查通过(返回true)，通过的相机将具有类型 THREE.OrthographicCamera 在执行检查的if分支中.
-         * @param camera 对象进行检查。
-         */
-        OrbitControls.prototype._checkOrthographicCamera = function (camera) {
-            return camera.isOrthographicCamera;
-        };
-        return OrbitControls;
-    }(THREE.EventDispatcher));
-    //# sourceMappingURL=OrbitControls.js.map
 
     /*
      * @Author: kekeqy
      * @Date: 2018-12-10 13:34:25
      * @LastEditors: kekeqy
-     * @LastEditTime: 2019-01-10 14:03:28
+     * @LastEditTime: 2019-01-16 15:11:27
      * @Description: 摄像机类，就是 app.camera 对象
      */
     var CameraController = /** @class */ (function () {
@@ -53532,7 +53989,7 @@ TWEEN.Interpolation = {
             this._flyGroup = new TWEEN.Group();
             this.app = app;
             this.view = exports.CameraView.Normal;
-            this.controller = new OrbitControls(app.engine.camera, app.engine.renderer.domElement);
+            this.controller = new THREE.OrbitControls(app.engine.camera, app.engine.renderer.domElement);
             // this.controller.enableRotate = false;
             this.animate();
         }
@@ -53951,7 +54408,6 @@ TWEEN.Interpolation = {
         };
         return CameraController;
     }());
-    //# sourceMappingURL=CameraController.js.map
 
     /*
      * @Author: kekeqy
@@ -54175,7 +54631,6 @@ TWEEN.Interpolation = {
         });
         return Selector;
     }());
-    //# sourceMappingURL=Selector.js.map
 
     /*
      * @Author: kekeqy
@@ -54303,7 +54758,35 @@ TWEEN.Interpolation = {
         };
         return SelectorStyle;
     }());
-    //# sourceMappingURL=SelectorStyle.js.map
+
+    /*! *****************************************************************************
+    Copyright (c) Microsoft Corporation. All rights reserved.
+    Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+    this file except in compliance with the License. You may obtain a copy of the
+    License at http://www.apache.org/licenses/LICENSE-2.0
+
+    THIS CODE IS PROVIDED ON AN *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+    KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
+    WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
+    MERCHANTABLITY OR NON-INFRINGEMENT.
+
+    See the Apache Version 2.0 License for specific language governing permissions
+    and limitations under the License.
+    ***************************************************************************** */
+    /* global Reflect, Promise */
+
+    var extendStatics = function(d, b) {
+        extendStatics = Object.setPrototypeOf ||
+            ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+            function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
+        return extendStatics(d, b);
+    };
+
+    function __extends(d, b) {
+        extendStatics(d, b);
+        function __() { this.constructor = d; }
+        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+    }
 
     /*
      * @Author: kekeqy
@@ -54529,13 +55012,12 @@ TWEEN.Interpolation = {
         };
         return Utils;
     }());
-    //# sourceMappingURL=Utils.js.map
 
     /*
      * @Author: kekeqy
      * @Date: 2018-12-18 17:41:12
      * @LastEditors: kekeqy
-     * @LastEditTime: 2019-01-16 14:09:47
+     * @LastEditTime: 2019-01-16 15:10:36
      * @Description: 复合相机
      */
     var CombinedCamera = /** @class */ (function (_super) {
@@ -54757,7 +55239,6 @@ TWEEN.Interpolation = {
         };
         return CombinedCamera;
     }(THREE.Camera));
-    //# sourceMappingURL=CombinedCamera.js.map
 
     /*
      * @Author: kekeqy
@@ -54923,7 +55404,6 @@ TWEEN.Interpolation = {
         };
         return Engine;
     }());
-    //# sourceMappingURL=Engine.js.map
 
     /*
      * @Author: kekeqy
@@ -55392,7 +55872,6 @@ TWEEN.Interpolation = {
         };
         return App;
     }());
-    //# sourceMappingURL=App.js.map
 
     /*
      * @Author: kekeqy
@@ -55511,7 +55990,6 @@ TWEEN.Interpolation = {
         });
         return Building;
     }(BaseObject));
-    //# sourceMappingURL=Building.js.map
 
     /*
      * @Author: kekeqy
@@ -55562,7 +56040,6 @@ TWEEN.Interpolation = {
         });
         return Campus;
     }(BaseObject));
-    //# sourceMappingURL=Campus.js.map
 
     /*
      * @Author: kekeqy
@@ -55591,7 +56068,6 @@ TWEEN.Interpolation = {
         });
         return Facade;
     }(BaseObject));
-    //# sourceMappingURL=Facade.js.map
 
     /*
      * @Author: kekeqy
@@ -55748,7 +56224,6 @@ TWEEN.Interpolation = {
         });
         return Floor;
     }(BaseObject));
-    //# sourceMappingURL=Floor.js.map
 
     /*
      * @Author: kekeqy
@@ -55766,7 +56241,6 @@ TWEEN.Interpolation = {
         }
         return Heatmap;
     }(BaseObject));
-    //# sourceMappingURL=Heatmap.js.map
 
     /*
      * @Author: kekeqy
@@ -55784,7 +56258,6 @@ TWEEN.Interpolation = {
         }
         return LightBase;
     }(BaseObject));
-    //# sourceMappingURL=LightBase.js.map
 
     /*
      * @Author: kekeqy
@@ -55865,7 +56338,6 @@ TWEEN.Interpolation = {
         });
         return Line;
     }(BaseObject));
-    //# sourceMappingURL=Line.js.map
 
     /*
      * @Author: kekeqy
@@ -55972,7 +56444,6 @@ TWEEN.Interpolation = {
         });
         return PointsBase;
     }(BaseObject));
-    //# sourceMappingURL=PointsBase.js.map
 
     /*
      * @Author: kekeqy
@@ -56070,7 +56541,6 @@ TWEEN.Interpolation = {
         });
         return LineBase;
     }(PointsBase));
-    //# sourceMappingURL=LineBase.js.map
 
     /*
      * @Author: kekeqy
@@ -56270,7 +56740,6 @@ TWEEN.Interpolation = {
         });
         return Marker;
     }(BaseObject));
-    //# sourceMappingURL=Marker.js.map
 
     /*
      * @Author: kekeqy
@@ -56461,7 +56930,6 @@ TWEEN.Interpolation = {
         };
         return Maths;
     }());
-    //# sourceMappingURL=Maths.js.map
 
     /*
      * @Author: kekeqy
@@ -56488,7 +56956,6 @@ TWEEN.Interpolation = {
         };
         return Navigation;
     }());
-    //# sourceMappingURL=Navigation.js.map
 
     /*
      * @Author: kekeqy
@@ -56590,7 +57057,6 @@ TWEEN.Interpolation = {
         };
         return PanoManager;
     }());
-    //# sourceMappingURL=PanoManager.js.map
 
     /*
      * @Author: kekeqy
@@ -56608,7 +57074,6 @@ TWEEN.Interpolation = {
         }
         return ParticleSystem;
     }(BaseObject));
-    //# sourceMappingURL=ParticleSystem.js.map
 
     /*
      * @Author: kekeqy
@@ -56697,7 +57162,6 @@ TWEEN.Interpolation = {
         };
         return Picker;
     }());
-    //# sourceMappingURL=Picker.js.map
 
     /*
      * @Author: kekeqy
@@ -56737,7 +57201,6 @@ TWEEN.Interpolation = {
         });
         return PolygonLine;
     }(LineBase));
-    //# sourceMappingURL=PolygonLine.js.map
 
     /*
      * @Author: kekeqy
@@ -56883,7 +57346,6 @@ TWEEN.Interpolation = {
         });
         return Room;
     }(BaseObject));
-    //# sourceMappingURL=Room.js.map
 
     /*
      * @Author: kekeqy
@@ -56919,7 +57381,6 @@ TWEEN.Interpolation = {
         };
         return RouteLine;
     }(LineBase));
-    //# sourceMappingURL=RouteLine.js.map
 
     /*
      * @Author: kekeqy
@@ -56972,7 +57433,6 @@ TWEEN.Interpolation = {
         };
         return SceneLevel;
     }());
-    //# sourceMappingURL=SceneLevel.js.map
 
     /*
      * @Author: kekeqy
@@ -57034,7 +57494,6 @@ TWEEN.Interpolation = {
         });
         return SceneRoot;
     }(BaseObject));
-    //# sourceMappingURL=SceneRoot.js.map
 
     /*
      * @Author: kekeqy
@@ -57102,7 +57561,6 @@ TWEEN.Interpolation = {
         };
         return Selection;
     }());
-    //# sourceMappingURL=Selection.js.map
 
     /*
      * @Author: kekeqy
@@ -57164,7 +57622,6 @@ TWEEN.Interpolation = {
         });
         return SpotLight;
     }(LightBase));
-    //# sourceMappingURL=SpotLight.js.map
 
     /*
      * @Author: kekeqy
@@ -57257,7 +57714,6 @@ TWEEN.Interpolation = {
         });
         return Thing;
     }(BaseObject));
-    //# sourceMappingURL=Thing.js.map
 
     /*
      * @Author: kekeqy
@@ -57272,7 +57728,6 @@ TWEEN.Interpolation = {
         }
         return UIAnchor;
     }());
-    //# sourceMappingURL=UIAnchor.js.map
 
     /*
      * @Author: kekeqy
@@ -57290,7 +57745,6 @@ TWEEN.Interpolation = {
         }
         return Water;
     }(PointsBase));
-    //# sourceMappingURL=Water.js.map
 
     /*
      * @Author: kekeqy
@@ -57316,7 +57770,6 @@ TWEEN.Interpolation = {
         }
         return WebView;
     }(BaseObject));
-    //# sourceMappingURL=WebView.js.map
 
     /*
      * @Author: kekeqy
@@ -57367,7 +57820,6 @@ TWEEN.Interpolation = {
         };
         return Flags;
     }());
-    //# sourceMappingURL=Flags.js.map
 
     /*
      * @Author: kekeqy
@@ -57386,7 +57838,6 @@ TWEEN.Interpolation = {
          */
         CameraType[CameraType["Orthographic"] = 1] = "Orthographic";
     })(exports.CameraType || (exports.CameraType = {}));
-    //# sourceMappingURL=CameraType.js.map
 
     /*
      * @Author: kekeqy
@@ -57409,7 +57860,6 @@ TWEEN.Interpolation = {
          */
         DragState[DragState["DragEnd"] = 2] = "DragEnd";
     })(exports.DragState || (exports.DragState = {}));
-    //# sourceMappingURL=DragState.js.map
 
     /*
      * @Author: kekeqy
@@ -57432,7 +57882,6 @@ TWEEN.Interpolation = {
          */
         LoopType[LoopType["PingPong"] = 2] = "PingPong";
     })(exports.LoopType || (exports.LoopType = {}));
-    //# sourceMappingURL=LoopType.js.map
 
     /*
      * @Author: kekeqy
@@ -57455,7 +57904,6 @@ TWEEN.Interpolation = {
          */
         AreaPickType[AreaPickType["NotRealTime"] = 2] = "NotRealTime";
     })(exports.AreaPickType || (exports.AreaPickType = {}));
-    //# sourceMappingURL=AreaPickType.js.map
 
     /*
      * @Author: kekeqy
@@ -57482,7 +57930,6 @@ TWEEN.Interpolation = {
          */
         SkyBox[SkyBox["SunCloud"] = 3] = "SunCloud";
     })(exports.SkyBox || (exports.SkyBox = {}));
-    //# sourceMappingURL=SkyBox.js.map
 
     /*
      * @Author: kekeqy
@@ -57509,7 +57956,6 @@ TWEEN.Interpolation = {
          */
         LevelType[LevelType["Floor"] = 3] = "Floor";
     })(exports.LevelType || (exports.LevelType = {}));
-    //# sourceMappingURL=LevelType.js.map
 
     /*
      * @Author: kekeqy
@@ -57904,7 +58350,6 @@ TWEEN.Interpolation = {
          */
         KeyType[KeyType["SingleQuote"] = 95] = "SingleQuote";
     })(exports.KeyType || (exports.KeyType = {}));
-    //# sourceMappingURL=KeyType.js.map
 
     /*
      * @Author: kekeqy
@@ -57943,7 +58388,6 @@ TWEEN.Interpolation = {
          */
         EventTag[EventTag["LevelBackOperation"] = 6] = "LevelBackOperation";
     })(exports.EventTag || (exports.EventTag = {}));
-    //# sourceMappingURL=EventTag.js.map
 
     /*
      * @Author: kekeqy
@@ -58130,7 +58574,6 @@ TWEEN.Interpolation = {
          */
         EventType[EventType["LeaveLevel"] = 49] = "LeaveLevel";
     })(exports.EventType || (exports.EventType = {}));
-    //# sourceMappingURL=EventType.js.map
 
     /*
      * @Author: kekeqy
@@ -58171,7 +58614,6 @@ TWEEN.Interpolation = {
         });
         return Door;
     }(Thing));
-    //# sourceMappingURL=Door.js.map
 
     /*
      * @Author: kekeqy
@@ -58186,7 +58628,6 @@ TWEEN.Interpolation = {
         }
         return ParticleEmitter;
     }());
-    //# sourceMappingURL=ParticleEmitter.js.map
 
     /*
      * @Author: kekeqy
@@ -58201,7 +58642,6 @@ TWEEN.Interpolation = {
         }
         return ParticleGroup;
     }());
-    //# sourceMappingURL=ParticleGroup.js.map
 
     /*
      * @Author: kekeqy
@@ -58258,7 +58698,6 @@ TWEEN.Interpolation = {
         };
         return TextRegion;
     }(BaseObject));
-    //# sourceMappingURL=TextRegion.js.map
 
     /*
      * @Author: kekeqy
@@ -58276,7 +58715,6 @@ TWEEN.Interpolation = {
         }
         return ThingGeometry;
     }(Thing));
-    //# sourceMappingURL=ThingGeometry.js.map
 
     /*
      * @Author: kekeqy
@@ -58294,7 +58732,6 @@ TWEEN.Interpolation = {
         }
         return Box;
     }(ThingGeometry));
-    //# sourceMappingURL=Box.js.map
 
     /*
      * @Author: kekeqy
@@ -58312,7 +58749,6 @@ TWEEN.Interpolation = {
         }
         return Sphere;
     }(ThingGeometry));
-    //# sourceMappingURL=Sphere.js.map
 
     /*
      * @Author: kekeqy
@@ -58330,7 +58766,6 @@ TWEEN.Interpolation = {
         }
         return Plane;
     }(ThingGeometry));
-    //# sourceMappingURL=Plane.js.map
 
     /*
      * @Author: kekeqy
@@ -58348,7 +58783,6 @@ TWEEN.Interpolation = {
         }
         return Cylinder;
     }(ThingGeometry));
-    //# sourceMappingURL=Cylinder.js.map
 
     /*
      * @Author: kekeqy
@@ -58366,7 +58800,6 @@ TWEEN.Interpolation = {
         }
         return Tetrahedron;
     }(ThingGeometry));
-    //# sourceMappingURL=Tetrahedron.js.map
 
     /*
      * @Author: kekeqy
@@ -58384,7 +58817,6 @@ TWEEN.Interpolation = {
         }
         return LayerCollection;
     }(Selector));
-    //# sourceMappingURL=LayerCollection.js.map
 
     /*
      * @Author: kekeqy
@@ -58415,7 +58847,6 @@ TWEEN.Interpolation = {
         };
         return BaseLayerCollection;
     }(LayerCollection));
-    //# sourceMappingURL=BaseLayerCollection.js.map
 
     /*
      * @Author: kekeqy
@@ -58433,7 +58864,6 @@ TWEEN.Interpolation = {
         }
         return Layer;
     }(BaseObject));
-    //# sourceMappingURL=Layer.js.map
 
     /*
      * @Author: kekeqy
@@ -58451,7 +58881,6 @@ TWEEN.Interpolation = {
         }
         return CompassControl;
     }(BaseObject));
-    //# sourceMappingURL=CompassControl.js.map
 
     /*
      * @Author: kekeqy
@@ -58469,7 +58898,6 @@ TWEEN.Interpolation = {
         }
         return EarthCompass;
     }(CompassControl));
-    //# sourceMappingURL=EarthCompass.js.map
 
     /*
      * @Author: kekeqy
@@ -58484,7 +58912,6 @@ TWEEN.Interpolation = {
         CornerType[CornerType["LeftTop"] = 2] = "LeftTop";
         CornerType[CornerType["LeftBottom"] = 3] = "LeftBottom";
     })(exports.CornerType || (exports.CornerType = {}));
-    //# sourceMappingURL=CornerType.js.map
 
     /*
      * @Author: kekeqy
@@ -58512,7 +58939,6 @@ TWEEN.Interpolation = {
         });
         return GeoBuilding;
     }(BaseObject));
-    //# sourceMappingURL=GeoBuilding.js.map
 
     /*
      * @Author: kekeqy
@@ -58530,7 +58956,6 @@ TWEEN.Interpolation = {
         }
         return GeoLine;
     }(BaseObject));
-    //# sourceMappingURL=GeoLine.js.map
 
     /*
      * @Author: kekeqy
@@ -58606,7 +59031,6 @@ TWEEN.Interpolation = {
         };
         return Map;
     }(BaseObject));
-    //# sourceMappingURL=Map.js.map
 
     /*
      * @Author: kekeqy
@@ -58624,7 +59048,6 @@ TWEEN.Interpolation = {
         }
         return TerrainLayer;
     }(Layer));
-    //# sourceMappingURL=TerrainLayer.js.map
 
     /*
      * @Author: kekeqy
@@ -58642,7 +59065,6 @@ TWEEN.Interpolation = {
         }
         return UserLayerCollection;
     }(LayerCollection));
-    //# sourceMappingURL=UserLayerCollection.js.map
 
     /*
      * @Author: kekeqy
@@ -58667,7 +59089,6 @@ TWEEN.Interpolation = {
         };
         return ThingLayer;
     }(BaseObject));
-    //# sourceMappingURL=ThingLayer.js.map
 
     /*
      * @Author: kekeqy
@@ -58685,7 +59106,6 @@ TWEEN.Interpolation = {
         }
         return Tile3dLayer;
     }(BaseObject));
-    //# sourceMappingURL=Tile3dLayer.js.map
 
     /*
      * @Author: kekeqy
@@ -58730,7 +59150,6 @@ TWEEN.Interpolation = {
         });
         return TileLayerStyle;
     }());
-    //# sourceMappingURL=TileLayerStyle.js.map
 
     /*
      * @Author: kekeqy
@@ -58748,7 +59167,6 @@ TWEEN.Interpolation = {
         }
         return TileLayer;
     }(BaseObject));
-    //# sourceMappingURL=TileLayer.js.map
 
     /*
      * @Author: kekeqy
@@ -58757,7 +59175,6 @@ TWEEN.Interpolation = {
      * @LastEditTime: 2019-01-11 17:51:07
      * @Description: 模块导出类
      */
-    //# sourceMappingURL=Index.js.map
 
     exports.BaseObject = BaseObject;
     exports.BaseStyle = BaseStyle;

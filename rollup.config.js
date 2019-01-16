@@ -12,6 +12,7 @@ const debug = process.env.NODE_ENV === 'development' ? true : false;
 const combineFiles = [
     './node_modules/three/build/three.js',
     './node_modules/three/examples/js/loaders/GLTFLoader.js',
+    './node_modules/three/examples/js/controls/OrbitControls.js',
     './node_modules/@tweenjs/tween.js/src/Tween.js'
 ];
 var banner = '';
